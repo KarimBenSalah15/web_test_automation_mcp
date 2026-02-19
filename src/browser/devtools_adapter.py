@@ -12,9 +12,28 @@ from src.mcp_client.session import McpSession
 class DevToolsAdapter:
     def __init__(self, session: McpSession) -> None:
         self.session = session
+        self._last_action_tools: list[str] = []
+
+    async def _call_and_track(self, tool_name: str, params: dict[str, Any]) -> Any:
+        """Call a tool and automatically track it."""
+        self._called_tool(tool_name)  # Track BEFORE calling so it's recorded even if call fails
+        result = await self.session.call_tool(tool_name, params)
+        return result
+
+    def _called_tool(self, tool_name: str) -> None:
+        """Track a tool call for the current action."""
+        if tool_name not in self._last_action_tools:
+            self._last_action_tools.append(tool_name)
+
+    def get_tools_used(self) -> list[str]:
+        """Get and reset tools used in the last action."""
+        tools = self._last_action_tools.copy()
+        self._last_action_tools.clear()
+        return tools
 
     async def open_url(self, url: str) -> Any:
-        raw = await self.session.call_tool("navigate_page", {"url": url})
+        self._last_action_tools.clear()
+        raw = await self._call_and_track("navigate_page", {"url": url})
         if isinstance(raw, dict) and raw.get("isError") is True:
             return raw
 
@@ -24,9 +43,11 @@ class DevToolsAdapter:
         return {"navigate": raw, "page_ready": readiness}
 
     async def query_dom(self, selector: str) -> Any:
-        return await self.session.call_tool("take_snapshot", {})
+        self._last_action_tools.clear()
+        return await self._call_and_track("take_snapshot", {})
 
     async def click(self, selector: str) -> Any:
+        self._last_action_tools.clear()
         selector_json = json.dumps(selector)
         script = (
             "() => {"
@@ -124,7 +145,7 @@ class DevToolsAdapter:
         script_raw: Any = None
 
         while time.monotonic() <= deadline:
-            script_raw = await self.session.call_tool("evaluate_script", {"function": script})
+            script_raw = await self._call_and_track("evaluate_script", {"function": script})
             if not isinstance(script_raw, dict):
                 return script_raw
 
@@ -136,9 +157,11 @@ class DevToolsAdapter:
             await asyncio.sleep(0.25)
 
         uid = await self._resolve_uid(selector, preferred_roles=("button", "link"))
-        return await self.session.call_tool("click", {"uid": uid})
+        result = await self._call_and_track("click", {"uid": uid})
+        return result
 
     async def type_text(self, selector: str, text: str) -> Any:
+        self._last_action_tools.clear()
         selector_json = json.dumps(selector)
         text_json = json.dumps(text)
         script = (
@@ -181,7 +204,7 @@ class DevToolsAdapter:
             "return {ok:true};"
             "}"
         )
-        script_raw = await self.session.call_tool("evaluate_script", {"function": script})
+        script_raw = await self._call_and_track("evaluate_script", {"function": script})
         if not isinstance(script_raw, dict):
             return script_raw
         if script_raw.get("isError") is not True and self._script_result_ok(script_raw):
@@ -191,13 +214,14 @@ class DevToolsAdapter:
             selector,
             preferred_roles=("searchbox", "textbox", "textarea", "input"),
         )
-        return await self.session.call_tool(
+        result = await self._call_and_track(
             "fill",
             {
                 "uid": uid,
                 "value": text,
             },
         )
+        return result
 
     async def wait_until_page_ready(self, timeout_ms: int = 6000, poll_ms: int = 200) -> dict[str, Any]:
         script = (
@@ -213,7 +237,7 @@ class DevToolsAdapter:
         last_state: dict[str, Any] = {"readyState": "loading", "hasBody": False, "href": ""}
 
         while time.monotonic() <= deadline:
-            raw = await self.session.call_tool("evaluate_script", {"function": script})
+            raw = await self._call_and_track("evaluate_script", {"function": script})
             if isinstance(raw, dict):
                 if raw.get("isError") is True:
                     return {
@@ -243,7 +267,8 @@ class DevToolsAdapter:
         }
 
     async def wait_for(self, event: str, timeout_ms: int = 5000) -> Any:
-        return await self.session.call_tool(
+        self._last_action_tools.clear()
+        return await self._call_and_track(
             "wait_for",
             {
                 "text": event,
@@ -269,7 +294,7 @@ class DevToolsAdapter:
             "}"
         )
 
-        raw = await self.session.call_tool("evaluate_script", {"function": state_script})
+        raw = await self._call_and_track("evaluate_script", {"function": state_script})
         state = self._extract_script_result_payload(raw) if isinstance(raw, dict) else None
         if not isinstance(state, dict):
             state = {}
@@ -298,7 +323,7 @@ class DevToolsAdapter:
                     "href": href,
                 }
 
-        snapshot_raw = await self.session.call_tool("take_snapshot", {})
+        snapshot_raw = await self._call_and_track("take_snapshot", {})
         snapshot_text = self._snapshot_text(snapshot_raw).lower()
         if event_text and event_text.lower() in snapshot_text:
             return {
@@ -328,7 +353,8 @@ class DevToolsAdapter:
         }
 
     async def press_key(self, key: str) -> Any:
-        return await self.session.call_tool(
+        self._last_action_tools.clear()
+        return await self._call_and_track(
             "press_key",
             {
                 "key": key,
@@ -381,7 +407,7 @@ class DevToolsAdapter:
 
         token_looks_like_css = self._looks_like_css_selector(token)
 
-        snapshot = await self.session.call_tool("take_snapshot", {})
+        snapshot = await self._call_and_track("take_snapshot", {})
         snapshot_text = self._snapshot_text(snapshot)
         lines = [line.strip() for line in snapshot_text.splitlines() if line.strip()]
 

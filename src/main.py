@@ -128,12 +128,10 @@ async def _run(prompt: str) -> dict[str, Any]:
 
         console_print(f"\n🎯 Objective: {prompt}\n")
         adapter = DevToolsAdapter(session)
-        enable_ocr = os.getenv("ENABLE_OCR", "0").lower() in {"1", "true", "yes", "on"}
         loop = AgentLoop(
             adapter,
             groq_client=groq,
             max_steps=int(os.getenv("MAX_STEPS", "20")),
-            enable_ocr=enable_ocr,
             verbose=verbose,
         )
         memory = await loop.run(objective=prompt)

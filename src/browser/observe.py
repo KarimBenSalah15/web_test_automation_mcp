@@ -9,7 +9,6 @@ class Observation:
     dom: Any
     console: Any
     accessibility: Any
-    ocr_text: str
 
     def has_errors(self) -> bool:
         if isinstance(self.console, list):

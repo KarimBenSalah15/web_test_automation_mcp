@@ -11,7 +11,6 @@ from src.agent.retry import should_retry
 from src.browser.devtools_adapter import DevToolsAdapter
 from src.browser.observe import Observation
 from src.llm.groq_client import GroqClient
-from src.ocr.engine import extract_text_from_image
 
 
 class AgentLoop:
@@ -22,14 +21,12 @@ class AgentLoop:
         max_steps: int = 20,
         step_retry_limit: int = 2,
         artifacts_dir: str = "artifacts",
-        enable_ocr: bool = False,
         verbose: bool = False,
     ) -> None:
         self.adapter = adapter
         self.groq_client = groq_client
         self.max_steps = max_steps
         self.step_retry_limit = step_retry_limit
-        self.enable_ocr = enable_ocr
         self.verbose = verbose
         self.artifacts_dir = Path(artifacts_dir)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +91,7 @@ class AgentLoop:
                     print(f"   Attempt {attempt}/{self.step_retry_limit}...")
                 result = await self._execute_action(browser_action)
                 has_error = not result.get("success", False)
+                tools_used = result.get("tools_used", [])
 
                 memory.push(
                     {
@@ -103,19 +101,20 @@ class AgentLoop:
                         "result": result,
                         "observation": {
                             "console": obs.console,
-                            "ocr": obs.ocr_text[:500] if obs.ocr_text else "",
                             "console_has_error": obs.has_errors(),
                         },
                     }
                 )
 
                 if not has_error:
-                    print("   ✅ PASSED")
+                    tools_str = ", ".join(tools_used) if tools_used else "none"
+                    print(f"   ✅ PASSED | Tools: {tools_str}")
                     break
 
                 if attempt >= self.step_retry_limit:
-                    error_msg = result.get("error", "Unknown error")
-                    print(f"   ❌ FAILED after {attempt} attempts: {error_msg}")
+                    error_msg = result.get("reason") or result.get("error") or "Unknown error"
+                    tools_str = ", ".join(tools_used) if tools_used else "none"
+                    print(f"   ❌ FAILED after {attempt} attempts: {error_msg} | Tools: {tools_str}")
                     # Don't break - let LLM see the failure and adjust next action
 
             step_idx += 1
@@ -196,18 +195,23 @@ class AgentLoop:
             elif action.action_type == "query":
                 raw = await self.adapter.query_dom(action.selector or "body")
             else:
-                return {"success": False, "reason": f"Unsupported action: {action.action_type}"}
+                tools_used = self.adapter.get_tools_used()
+                return {"success": False, "reason": f"Unsupported action: {action.action_type}", "tools_used": tools_used}
+
+            # Get tools used in this action
+            tools_used = self.adapter.get_tools_used()
 
             if isinstance(raw, dict):
                 fallback = raw.get("smart_fallback")
                 if isinstance(fallback, dict) and fallback.get("ok") is True:
-                    return {"success": True, "raw": raw}
+                    return {"success": True, "raw": raw, "tools_used": tools_used}
 
             if isinstance(raw, dict) and raw.get("isError") is True:
                 return {
                     "success": False,
                     "reason": self._extract_mcp_error(raw),
                     "raw": raw,
+                    "tools_used": tools_used,
                 }
             business_failure_reason = self._extract_business_failure(raw)
             if business_failure_reason:
@@ -215,10 +219,13 @@ class AgentLoop:
                     "success": False,
                     "reason": business_failure_reason,
                     "raw": raw,
+                    "tools_used": tools_used,
                 }
-            return {"success": True, "raw": raw}
+            return {"success": True, "raw": raw, "tools_used": tools_used}
         except Exception as exc:
-            return {"success": False, "reason": str(exc)}
+            tools_used = self.adapter.get_tools_used()
+            error_msg = f"{type(exc).__name__}: {str(exc)}" if str(exc) else type(exc).__name__
+            return {"success": False, "reason": error_msg, "tools_used": tools_used}
 
     @staticmethod
     def _extract_mcp_error(raw: dict[str, Any]) -> str:
@@ -307,16 +314,6 @@ class AgentLoop:
         except Exception:
             screenshot_file_exists = False
 
-        ocr_text = ""
-        if screenshot_file_exists and self.enable_ocr:
-            try:
-                ocr_text = await asyncio.wait_for(
-                    asyncio.to_thread(extract_text_from_image, screenshot_path),
-                    timeout=20,
-                )
-            except Exception:
-                ocr_text = ""
-
         try:
             dom = await asyncio.wait_for(self.adapter.query_dom("body"), timeout=8)
         except Exception as exc:
@@ -332,4 +329,4 @@ class AgentLoop:
         except Exception as exc:
             accessibility = {"error": str(exc)}
 
-        return Observation(dom=dom, console=console, accessibility=accessibility, ocr_text=ocr_text)
+        return Observation(dom=dom, console=console, accessibility=accessibility)
