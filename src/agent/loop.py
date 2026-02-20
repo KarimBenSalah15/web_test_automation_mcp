@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from src.agent.memory import AgentMemory
 from src.agent.policy import to_browser_action
 from src.agent.retry import should_retry
 from src.browser.devtools_adapter import DevToolsAdapter
+from src.browser.dom_utils import DomSnapshot, DomDiffer
 from src.browser.observe import Observation
 from src.llm.groq_client import GroqClient
 
@@ -30,6 +32,10 @@ class AgentLoop:
         self.verbose = verbose
         self.artifacts_dir = Path(artifacts_dir)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        
+        # DOM tracking for Fail-Fast heuristics
+        self.recent_dom_snapshots: deque[DomSnapshot] = deque(maxlen=5)
+        self.consecutive_unchanged_count = 0
 
     async def run(self, objective: str) -> AgentMemory:
         """Agentic loop: LLM inspects DOM and decides actions dynamically."""
@@ -43,6 +49,10 @@ class AgentLoop:
             # Observe current browser state
             obs = await self._observe(step_idx)
             current_state = await self._build_state(obs)
+            
+            # Create DOM snapshot BEFORE action
+            dom_snapshot_before = DomSnapshot(obs.accessibility)
+            self.recent_dom_snapshots.append(dom_snapshot_before)
 
             # LLM decides next action based on current DOM
             try:
@@ -50,6 +60,7 @@ class AgentLoop:
                     objective=objective,
                     current_state=current_state,
                     history=memory.history,
+                    dom_unchanged_count=self.consecutive_unchanged_count,
                 )
             except Exception as exc:
                 print(f"   ❌ LLM Error: {exc}")
@@ -116,6 +127,26 @@ class AgentLoop:
                     tools_str = ", ".join(tools_used) if tools_used else "none"
                     print(f"   ❌ FAILED after {attempt} attempts: {error_msg} | Tools: {tools_str}")
                     # Don't break - let LLM see the failure and adjust next action
+            
+            # Check for DOM changes (Fail-Fast heuristics)
+            try:
+                obs_after = await self._observe(step_idx)
+                dom_snapshot_after = DomSnapshot(obs_after.accessibility)
+                differ = DomDiffer(dom_snapshot_before, dom_snapshot_after)
+                
+                if not differ.has_changed():
+                    self.consecutive_unchanged_count += 1
+                    if self.verbose:
+                        print(f"   ⚠️ DOM unchanged ({self.consecutive_unchanged_count}/3)")
+                else:
+                    self.consecutive_unchanged_count = 0
+                
+                # Store result with DOM change info
+                if memory.history:
+                    memory.history[-1]["dom_changed"] = differ.has_changed()
+            except Exception:
+                # If snapshot fails, reset unchanged counter to be safe
+                self.consecutive_unchanged_count = 0
 
             step_idx += 1
 
@@ -172,6 +203,11 @@ class AgentLoop:
                 raw = await self.adapter.open_url(action.url)
             elif action.action_type == "click" and action.selector:
                 raw = await self.adapter.click(action.selector)
+                # Self-Repair: Get alternatives if click fails
+                if isinstance(raw, dict) and raw.get("isError") is True:
+                    alternatives = await self.adapter.get_clickable_alternatives(action.selector)
+                    if alternatives:
+                        raw["suggested_alternatives"] = alternatives
             elif action.action_type == "type" and action.selector:
                 raw = await self.adapter.type_text(action.selector, action.value or "")
             elif action.action_type == "press":

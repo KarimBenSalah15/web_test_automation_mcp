@@ -113,7 +113,7 @@ async def _run(prompt: str) -> dict[str, Any]:
 
     resolved_server_command = _resolve_command(server_command)
     transport = StdioTransport(resolved_server_command, server_args)
-    session = McpSession(transport, timeout_seconds=float(os.getenv("STEP_TIMEOUT_SECONDS", "20")))
+    session = McpSession(transport, timeout_seconds=float(os.getenv("STEP_TIMEOUT_SECONDS", "30")))
 
     await session.start()
     try:

@@ -576,3 +576,38 @@ class DevToolsAdapter:
         if isinstance(value, str):
             return value
         return ""
+
+    async def get_clickable_alternatives(self, failed_selector: str) -> list[dict[str, str]]:
+        """Extract clickable alternatives from the DOM when a selector fails."""
+        try:
+            snapshot = await self._call_and_track("take_snapshot", {})
+            snapshot_text = self._snapshot_text(snapshot)
+            lines = [line.strip() for line in snapshot_text.splitlines() if line.strip()]
+            
+            alternatives = []
+            seen_uids = set()
+            
+            # Extract up to 5 clickable alternatives from the snapshot
+            for line in lines:
+                uid = self._extract_uid(line)
+                if uid and uid not in seen_uids:
+                    # Extract role and text from the line
+                    if re.search(r"\b(button|link|link\s+button)\b", line, re.IGNORECASE):
+                        # Extract text if present
+                        text_match = re.search(r"['\"]([^'\"]+)['\"]", line)
+                        text = text_match.group(1) if text_match else ""
+                        
+                        if text:
+                            seen_uids.add(uid)
+                            alternatives.append({
+                                "uid": uid,
+                                "text": text[:80],  # Limit to 80 chars
+                                "description": f"Element with text '{text}'"
+                            })
+                        
+                        if len(alternatives) >= 5:
+                            break
+            
+            return alternatives
+        except Exception:
+            return []

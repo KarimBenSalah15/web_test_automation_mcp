@@ -73,12 +73,13 @@ class GroqClient:
         content = data["choices"][0]["message"]["content"]
         return self._parse_json_content(content)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=8))
     async def decide_next_action(
         self,
         objective: str,
         current_state: dict[str, Any],
         history: list[dict[str, Any]],
+        dom_unchanged_count: int = 0,
     ) -> dict[str, Any]:
         """LLM inspects current DOM state and decides the next action."""
         system_prompt = (
@@ -87,8 +88,12 @@ class GroqClient:
             "Return strict JSON with: action (navigate|click|type|press|wait|done), selector (string|null), "
             "value (string|null), url (string|null), reasoning (string explaining why this action). "
             "Use 'done' action when objective is fully achieved. "
-            "Inspect the DOM structure carefully to find the best selector (prefer semantic: role, aria-label, text). "
-            "If previous action failed, analyze why and adjust your selector/strategy."
+            "ALWAYS inspect the DOM structure carefully and ONLY use selectors that YOU CAN SEE in the provided DOM. "
+            "Never invent or guess selectors. If you cannot find a matching element in the DOM, try alternative approaches: "
+            "adjust the selector, use different search terms, try waiting for content to load, or navigate to a different page. "
+            "If previous action failed with 'no clickable element found', the selector did not match anything - analyze the DOM carefully "
+            "and find a selector that actually exists in the structure provided. Use semantic selectors when possible: role, aria-label, text content. "
+            "If previous action failed, analyze why and adjust your strategy instead of retrying the same selector."
         )
 
         dom_summary = self._summarize_dom(current_state.get("dom", {}))
@@ -106,9 +111,38 @@ class GroqClient:
             user_message += f"Console Errors: {console_errors[:3]}\n\n"
 
         if last_action:
+            action = last_action.get('action', {})
+            result = last_action.get('result', {})
+            success = result.get('success', False)
+            
+            user_message += f"Last Action: {action}\n"
+            if success:
+                user_message += "Result: Success\n\n"
+            else:
+                user_message += "Result: Failed\n"
+                reason = result.get('reason') or result.get('error') or "Unknown error"
+                user_message += f"Error Reason: {reason}\n"
+                
+                # Self-Repair: Show suggested alternatives if available
+                alternatives = result.get('raw', {}).get('suggested_alternatives', []) if isinstance(result.get('raw'), dict) else []
+                if alternatives:
+                    user_message += "Suggested Clickable Alternatives:\n"
+                    for i, alt in enumerate(alternatives[:3], 1):
+                        user_message += f"  {i}. {alt.get('description', 'Unknown')}\n"
+                    user_message += "\n"
+                else:
+                    user_message += "\n"
+
+        
+        # Fail-Fast: Alert if DOM unchanged too many times
+        if dom_unchanged_count >= 3:
             user_message += (
-                f"Last Action: {last_action.get('action', {})}\n"
-                f"Result: {'Success' if last_action.get('result', {}).get('success') else 'Failed'}\n\n"
+                "🚨 FAIL-FAST ALERT: The page DOM has not changed for the last 3 actions.\n"
+                "This suggests your current approach is not working. Try:\n"
+                "  - Using a completely different selector strategy\n"
+                "  - Waiting for dynamic content to load\n"
+                "  - Navigating to a different page\n"
+                "  - Reconsidering the approach entirely\n\n"
             )
 
         user_message += "Decide the NEXT action to progress toward the objective."
