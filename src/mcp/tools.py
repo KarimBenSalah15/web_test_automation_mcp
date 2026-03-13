@@ -16,6 +16,10 @@ class TypeArgs(JsonSchemaModel):
     text: str
 
 
+class PressArgs(JsonSchemaModel):
+    key: str
+
+
 class ToolResult(JsonSchemaModel):
     ok: bool
     error: str | None = None

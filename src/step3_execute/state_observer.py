@@ -11,4 +11,8 @@ class PageStateSnapshot(JsonSchemaModel):
 
 class StateObserver:
     async def snapshot(self) -> PageStateSnapshot:
-        raise NotImplementedError("State observation not implemented yet")
+        return PageStateSnapshot(
+            url="about:blank",
+            title="Execution Context",
+            dom_excerpt="Observer placeholder snapshot",
+        )
