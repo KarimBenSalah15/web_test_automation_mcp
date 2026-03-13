@@ -49,17 +49,17 @@ DEFAULT_PROVIDER_MATRIX = ProviderMatrix(
             ),
             fallback=ModelAssignment(
                 provider=ProviderName.CEREBRAS,
-                model="qwen-3-235b",
+                model="zai-glm-4.7",
             ),
         ),
         PipelineStep.GENERATE: StepProviderPolicy(
             primary=ModelAssignment(
-                provider=ProviderName.MISTRAL,
-                model="mistral-large-latest",
+                provider=ProviderName.CEREBRAS,
+                model="zai-glm-4.7",
             ),
             fallback=ModelAssignment(
-                provider=ProviderName.CEREBRAS,
-                model="qwen-3-235b",
+                provider=ProviderName.MISTRAL,
+                model="mistral-large-latest",
             ),
         ),
         PipelineStep.EXECUTE: StepProviderPolicy(
@@ -69,7 +69,7 @@ DEFAULT_PROVIDER_MATRIX = ProviderMatrix(
             ),
             fallback=ModelAssignment(
                 provider=ProviderName.CEREBRAS,
-                model="qwen-3-235b",
+                model="zai-glm-4.7",
             ),
         ),
         PipelineStep.LOG: StepProviderPolicy(
@@ -79,7 +79,7 @@ DEFAULT_PROVIDER_MATRIX = ProviderMatrix(
             ),
             fallback=ModelAssignment(
                 provider=ProviderName.CEREBRAS,
-                model="qwen-3-235b",
+                model="zai-glm-4.7",
             ),
         ),
     }

@@ -1,9 +1,14 @@
+# Primary extractor implementation that fetches the HTML content of the target page,
+# parses it to identify interactive elements, and generates candidate selectors for each element. 
+# It then applies filtering, refinement, and validation steps to produce a final
+# set of selectors mapped to their corresponding interactive elements.
 from __future__ import annotations
 
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Any
 
 import httpx
 
@@ -11,6 +16,7 @@ from src.config.schemas import SelectorKind
 from src.step1_extract.interactive_filter import InteractiveElementFilter
 from src.step1_extract.models import SelectorMapExtractionResult
 from src.step1_extract.models import SelectorMap, SelectorRecord
+from src.step1_extract.selector_refiner import SelectorRefiner
 from src.step1_extract.selector_validator import SelectorValidator
 
 
@@ -92,9 +98,10 @@ class _InteractiveDomParser(HTMLParser):
 
 
 class Step1Extractor:
-    def __init__(self) -> None:
+    def __init__(self, *, refiner: SelectorRefiner | None = None) -> None:
         self._filter = InteractiveElementFilter()
         self._validator = SelectorValidator()
+        self._refiner = refiner or SelectorRefiner()
 
 
     async def run(self, *, url: str, objective: str) -> SelectorMapExtractionResult:
@@ -103,8 +110,16 @@ class Step1Extractor:
         nodes = self._parse_html(html)
 
         candidates = self._build_candidates(nodes)
-        filtered = self._filter.filter(candidates)
-        validated, rejected = self._validator.validate(filtered)
+        pre_filtered = self._filter.filter(candidates)
+        refined_payload = await self._refiner.refine(
+            objective=objective,
+            url=url,
+            records=pre_filtered,
+        )
+        validated, rejected = self._validator.validate(
+            refined_payload=refined_payload,
+            extracted_records=pre_filtered,
+        )
 
         return SelectorMapExtractionResult(
             selector_map=SelectorMap(
@@ -294,7 +309,32 @@ class Step1Extractor:
             return True
         if (node.attrs.get("aria-hidden") or "").strip().lower() == "true":
             return True
-        return (node.attrs.get("type") or "").strip().lower() == "hidden"
+        if (node.attrs.get("type") or "").strip().lower() == "hidden":
+            return True
+
+        style = (node.attrs.get("style") or "").strip().lower()
+        if not style:
+            return False
+
+        style_map = Step1Extractor._style_to_map(style)
+        if style_map.get("display") == "none":
+            return True
+        if style_map.get("visibility") == "hidden":
+            return True
+        return False
+
+    @staticmethod
+    def _style_to_map(style: str) -> dict[str, str]:
+        entries: dict[str, str] = {}
+        for declaration in style.split(";"):
+            if ":" not in declaration:
+                continue
+            key, value = declaration.split(":", 1)
+            normalized_key = key.strip().lower()
+            normalized_value = value.strip().lower()
+            if normalized_key:
+                entries[normalized_key] = normalized_value
+        return entries
 
     @staticmethod
     def _is_valid_css_id(value: str) -> bool:

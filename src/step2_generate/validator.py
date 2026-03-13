@@ -1,3 +1,4 @@
+# Validator module: Validate generated test cases against the selector map.
 from __future__ import annotations
 
 from src.step1_extract.models import SelectorMap
