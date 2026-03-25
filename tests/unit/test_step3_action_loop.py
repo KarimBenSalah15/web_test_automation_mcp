@@ -1,6 +1,8 @@
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from src.config.schemas import Status
+from src.mcp.client import McpClient
 from src.step1_extract.models import SelectorMapExtractionResult
 from src.step2_generate import models as generation_models
 from src.step3_execute.action_dispatcher import ActionDispatcher, ActionResult
@@ -23,9 +25,26 @@ class _FakeReasoner(ReasoningLoop):
         )
 
 
+class _FakeMcpClient(McpClient):
+    """Stub MCP client for testing."""
+    async def call(self, *, tool_candidates: list[str], arguments: dict) -> any:
+        from src.mcp.tools import ToolResult
+        return ToolResult(ok=True, error=None, raw={"content": [{"text": ""}]})
+
+
 class _FakeObserver(StateObserver):
+    def __init__(self, mcp_client: McpClient | None = None) -> None:
+        # Accept mcp_client to match parent signature, but use a fake stub
+        super().__init__(mcp_client=mcp_client or _FakeMcpClient())
+    
     async def snapshot(self) -> PageStateSnapshot:
-        return PageStateSnapshot(url="https://example.com", title="Example", dom_excerpt="<form>...</form>")
+        return PageStateSnapshot(
+            url="https://example.com",
+            title="Example",
+            dom_excerpt="<form><input id='q'/><button>Search</button></form>",
+            console_logs=None,
+            screenshot_path=None,
+        )
 
 
 class _PassingDispatcher(ActionDispatcher):

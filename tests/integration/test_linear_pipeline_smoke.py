@@ -1,6 +1,8 @@
 import pytest
 
 from src.config.settings import RuntimeSettings
+from src.mcp.client import McpClient
+from src.mcp.tools import ToolResult
 from src.pipeline.runner import LinearPipelineRunner
 from src.step1_extract.extractor import Step1Extractor
 from src.step1_extract.selector_refiner import SelectorRefiner
@@ -11,6 +13,12 @@ from src.step3_execute.executor import Step3Executor
 from src.step3_execute.reasoning_loop import ReasoningDecision, ReasoningLoop
 from src.step3_execute.state_observer import PageStateSnapshot, StateObserver
 from src.step4_log.writer import JsonFileStep4Logger
+
+
+class _FakeMcpClient(McpClient):
+    """Stub MCP client for integration tests."""
+    async def call(self, *, tool_candidates: list[str], arguments: dict) -> ToolResult:
+        return ToolResult(ok=True, error=None, raw={"content": [{"text": ""}]})
 
 
 class _FakeStep1Refiner(SelectorRefiner):
@@ -144,8 +152,17 @@ class _FakeStep3Reasoner(ReasoningLoop):
 
 
 class _FakeStep3Observer(StateObserver):
+    def __init__(self, mcp_client: McpClient | None = None) -> None:
+        super().__init__(mcp_client=mcp_client or _FakeMcpClient())
+    
     async def snapshot(self) -> PageStateSnapshot:
-        return PageStateSnapshot(url="https://example.com", title="Example", dom_excerpt="<body>...</body>")
+        return PageStateSnapshot(
+            url="https://example.com",
+            title="Example",
+            dom_excerpt="<body><form><input id='q'/><button>Search</button></form></body>",
+            console_logs=None,
+            screenshot_path=None,
+        )
 
 
 class _FakeStep3Dispatcher(ActionDispatcher):

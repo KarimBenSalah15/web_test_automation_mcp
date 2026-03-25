@@ -23,16 +23,17 @@ class Step3Executor:
         observer: StateObserver | None = None,
     ) -> None:
         self._reasoning_loop = reasoning_loop or ReasoningLoop()
-        self._observer = observer or StateObserver()
         # When a custom dispatcher is injected (e.g. in tests) we don't own
         # the MCP lifecycle. On the production path we create the McpClient,
-        # pass it through to the dispatcher, and manage start/stop ourselves.
+        # pass it through to the dispatcher and observer, and manage start/stop ourselves.
         if dispatcher is not None:
             self._dispatcher = dispatcher
             self._mcp_client: McpClient | None = None
+            self._observer = observer or StateObserver(mcp_client=McpClient())
         else:
             mcp_client = McpClient()
             self._dispatcher = ActionDispatcher(mcp_client=mcp_client)
+            self._observer = observer or StateObserver(mcp_client=mcp_client)
             self._mcp_client = mcp_client
         self._model_used = ModelAssignment(
             provider=ProviderName.GROQ,
