@@ -60,14 +60,14 @@ class ActionDispatcher:
 
         if action == "assert_visible":
             result = await self._mcp_client.call(
-                tool_candidates=["browser_is_visible", "is_visible", "query_selector"],
+                tool_candidates=["wait_for", "evaluate_script", "browser_is_visible", "is_visible", "query_selector"],
                 arguments={"selector": request.selector},
             )
             return ActionResult(ok=result.ok, error=result.error)
 
         if action == "assert_text":
             result = await self._mcp_client.call(
-                tool_candidates=["browser_get_text", "get_text", "query_selector"],
+                tool_candidates=["evaluate_script", "browser_get_text", "get_text", "query_selector"],
                 arguments={"selector": request.selector},
             )
             if not result.ok:

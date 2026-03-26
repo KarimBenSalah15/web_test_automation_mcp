@@ -111,15 +111,30 @@ class Step1Extractor:
 
         candidates = self._build_candidates(nodes)
         pre_filtered = self._filter.filter(candidates)
-        refined_payload = await self._refiner.refine(
-            objective=objective,
-            url=url,
-            records=pre_filtered,
-        )
-        validated, rejected = self._validator.validate(
-            refined_payload=refined_payload,
-            extracted_records=pre_filtered,
-        )
+        rejected: list[str] = []
+
+        try:
+            refined_payload = await self._refiner.refine(
+                objective=objective,
+                url=url,
+                records=pre_filtered,
+            )
+            validated, llm_rejected = self._validator.validate(
+                refined_payload=refined_payload,
+                extracted_records=pre_filtered,
+            )
+            rejected.extend(llm_rejected)
+        except Exception as exc:
+            rejected.append(f"LLM refiner failed; using raw extracted records fallback: {exc}")
+            validated = []
+
+        # Keep pipeline alive on real pages: if LLM output cannot be validated,
+        # fall back to concrete parser-extracted records.
+        if not validated:
+            rejected.append(
+                "LLM refiner produced 0 valid records; using raw extracted records fallback"
+            )
+            validated = pre_filtered
 
         return SelectorMapExtractionResult(
             selector_map=SelectorMap(
@@ -183,6 +198,8 @@ class Step1Extractor:
                     is_visible=not self._is_hidden(node),
                     is_enabled="disabled" not in node.attrs,
                     source_xpath=self._xpath_for_node(node_index=index, nodes=nodes),
+                    dom_tag=node.tag,
+                    dom_attributes=dict(node.attrs),
                 )
             )
 

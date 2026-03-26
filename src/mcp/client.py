@@ -95,7 +95,10 @@ class McpClient:
         return await self._invoke_tool(tool_name=tool_name, arguments={"key": key})
 
     async def call(self, *, tool_candidates: list[str], arguments: dict[str, Any]) -> ToolResult:
-        tool_name = self._resolve_tool_name(tool_candidates)
+        try:
+            tool_name = self._resolve_tool_name(tool_candidates)
+        except Exception as exc:
+            return ToolResult(ok=False, error=str(exc), raw=None)
         return await self._invoke_tool(tool_name=tool_name, arguments=arguments)
 
     def _resolve_tool_name(self, candidates: list[str]) -> str:

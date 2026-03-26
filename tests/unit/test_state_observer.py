@@ -6,6 +6,11 @@ from src.mcp.tools import ToolResult
 from src.step3_execute.state_observer import StateObserver, PageStateSnapshot
 
 
+def _has_candidate(tool_candidates: list[str], *needles: str) -> bool:
+    lowered = [candidate.lower() for candidate in tool_candidates]
+    return any(any(needle in candidate for needle in needles) for candidate in lowered)
+
+
 @pytest.mark.asyncio
 async def test_state_observer_captures_real_page_state() -> None:
     """Test that StateObserver correctly captures page state from MCP."""
@@ -15,19 +20,19 @@ async def test_state_observer_captures_real_page_state() -> None:
     # Mock responses for each tool call
     async def mock_call(*, tool_candidates: list[str], arguments: dict) -> ToolResult:
         # Determine which tool is being called based on candidates
-        if "url" in tool_candidates[0].lower():
-            return ToolResult(
-                ok=True,
-                error=None,
-                raw={"content": [{"text": "https://example.com/search"}]},
-            )
-        elif "title" in tool_candidates[0].lower():
+        if _has_candidate(tool_candidates, "title"):
             return ToolResult(
                 ok=True,
                 error=None,
                 raw={"content": [{"text": "Example Search Page"}]},
             )
-        elif "dom" in tool_candidates[0].lower():
+        elif _has_candidate(tool_candidates, "list_pages", "url"):
+            return ToolResult(
+                ok=True,
+                error=None,
+                raw={"content": [{"text": "https://example.com/search"}]},
+            )
+        elif _has_candidate(tool_candidates, "snapshot", "dom"):
             return ToolResult(
                 ok=True,
                 error=None,
@@ -49,13 +54,13 @@ async def test_state_observer_captures_real_page_state() -> None:
                     ]
                 },
             )
-        elif "console" in tool_candidates[0].lower():
+        elif _has_candidate(tool_candidates, "console"):
             return ToolResult(
                 ok=True,
                 error=None,
                 raw={"content": [{"text": '["Warning: deprecated API"]'}]},
             )
-        elif "screenshot" in tool_candidates[0].lower():
+        elif _has_candidate(tool_candidates, "screenshot"):
             return ToolResult(
                 ok=True,
                 error=None,
@@ -89,7 +94,7 @@ async def test_state_observer_dom_cleaning() -> None:
     mock_mcp = AsyncMock()
     
     async def mock_call(*, tool_candidates: list[str], arguments: dict) -> ToolResult:
-        if "dom" in tool_candidates[0].lower():
+        if _has_candidate(tool_candidates, "snapshot", "dom"):
             return ToolResult(
                 ok=True,
                 error=None,
@@ -156,7 +161,7 @@ async def test_state_observer_truncates_large_dom() -> None:
     large_dom = "<div>" + ("<p>Content</p>" * 2000) + "</div>"
     
     async def mock_call(*, tool_candidates: list[str], arguments: dict) -> ToolResult:
-        if "dom" in tool_candidates[0].lower():
+        if _has_candidate(tool_candidates, "snapshot", "dom"):
             return ToolResult(
                 ok=True,
                 error=None,
@@ -181,7 +186,7 @@ async def test_state_observer_formats_console_logs() -> None:
     mock_mcp = AsyncMock()
     
     async def mock_call(*, tool_candidates: list[str], arguments: dict) -> ToolResult:
-        if "console" in tool_candidates[0].lower():
+        if _has_candidate(tool_candidates, "console"):
             # Return JSON array of console messages
             return ToolResult(
                 ok=True,
@@ -226,7 +231,7 @@ async def test_state_observer_saves_screenshot() -> None:
     ).decode('ascii')
     
     async def mock_call(*, tool_candidates: list[str], arguments: dict) -> ToolResult:
-        if "screenshot" in tool_candidates[0].lower():
+        if _has_candidate(tool_candidates, "screenshot"):
             return ToolResult(
                 ok=True,
                 error=None,

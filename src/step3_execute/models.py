@@ -16,6 +16,7 @@ class ActionTrace(JsonSchemaModel):
     llm_reasoning: str = Field(min_length=1)
     status: Status
     error: str | None = None
+    screenshot_path: str | None = None
     duration: Duration
     model_used: ModelAssignment
     fallback_used: bool = False

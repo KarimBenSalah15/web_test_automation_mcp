@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import datetime as dt
+from pathlib import Path
+
 from src.config.settings import RuntimeSettings
 from src.step1_extract.models import SelectorMapExtractionResult
 from src.step2_generate.models import TestCaseGenerationResult
@@ -19,6 +22,9 @@ class PipelineContext:
         self.url = url
         self.objective = objective
         self.settings = settings
+        self.run_started_at_utc = dt.datetime.now(dt.timezone.utc)
+        self.run_dir: Path = settings.artifacts_root / run_id
+        self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self.extraction: SelectorMapExtractionResult | None = None
         self.generation: TestCaseGenerationResult | None = None

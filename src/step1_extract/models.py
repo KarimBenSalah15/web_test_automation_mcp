@@ -21,6 +21,8 @@ class SelectorRecord(JsonSchemaModel):
     is_fragile: bool = False
     suggested_selector: str | None = None
     source_xpath: str | None = None
+    dom_tag: str | None = None
+    dom_attributes: dict[str, str] | None = None
 
 
 class SelectorMap(JsonSchemaModel):

@@ -116,6 +116,7 @@ class Step3Executor:
                     llm_reasoning=decision.reasoning,
                     status=step_status,
                     error=dispatch_result.error,
+                    screenshot_path=page_state.get("screenshot_path"),
                     duration=Duration(
                         started_at_utc=step_start,
                         ended_at_utc=step_end,

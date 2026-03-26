@@ -13,5 +13,5 @@ class RuntimeSettings(JsonSchemaModel):
 
     step_timeout_seconds: float = Field(default=45.0, gt=0)
     max_steps_per_test: int = Field(default=30, gt=0)
-    artifacts_root: Path = Path("src") / "artifacts" / "runs"
+    artifacts_root: Path = Path("artifacts") / "runs"
     provider_matrix: ProviderMatrix = DEFAULT_PROVIDER_MATRIX

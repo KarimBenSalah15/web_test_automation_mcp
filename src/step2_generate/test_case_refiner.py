@@ -47,19 +47,37 @@ class TestCaseRefiner:
         Returns:
             Dict with "cases" list containing refined test cases
         """
-        api_key = os.getenv("MISTRAL_API_KEY")
-        if not api_key:
-            raise ValueError("MISTRAL_API_KEY not set in environment")
-
         prompt = self._build_prompt(
             objective=objective,
             selector_map=selector_map,
             generated_payload=generated_payload,
         )
 
-        raw_response = await self._call_mistral(prompt=prompt, api_key=api_key)
-        text = self._extract_response_text(raw_response)
-        return self._parse_mistral_json(text)
+        errors: list[str] = []
+
+        primary_key = os.getenv("MISTRAL_API_KEY", "").strip()
+        if primary_key:
+            try:
+                raw_response = await self._call_mistral(prompt=prompt, api_key=primary_key)
+                text = self._extract_response_text(raw_response)
+                return self._parse_mistral_json(text)
+            except Exception as exc:
+                errors.append(f"mistral failed: {exc}")
+        else:
+            errors.append("mistral skipped: missing MISTRAL_API_KEY")
+
+        fallback_key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not fallback_key:
+            errors.append("gemini skipped: missing GEMINI_API_KEY")
+            raise RuntimeError("Step 2 refinement failed after fallback: " + " | ".join(errors))
+
+        try:
+            raw_response = await self._call_gemini(prompt=prompt, api_key=fallback_key)
+            text = self._extract_gemini_text(raw_response)
+            return self._parse_mistral_json(text)
+        except Exception as exc:
+            errors.append(f"gemini failed: {exc}")
+            raise RuntimeError("Step 2 refinement failed after fallback: " + " | ".join(errors))
 
     def _build_prompt(
         self,
@@ -139,12 +157,37 @@ class TestCaseRefiner:
             response.raise_for_status()
             return response.json()
 
+    async def _call_gemini(self, *, prompt: str, api_key: str) -> dict:
+        model = os.getenv("STEP2_REFINER_FALLBACK_MODEL", "gemini-2.5-flash")
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            f"?key={api_key}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(endpoint, json=payload)
+            response.raise_for_status()
+            return response.json()
+
     def _extract_response_text(self, raw_response: dict) -> str:
         """Extract text from Mistral response structure."""
         try:
             return raw_response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             raise ValueError(f"Failed to extract text from Mistral response: {e}")
+
+    def _extract_gemini_text(self, raw_response: dict) -> str:
+        try:
+            return raw_response["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as e:
+            raise ValueError(f"Failed to extract text from Gemini response: {e}")
 
     def _parse_mistral_json(self, text: str) -> dict:
         """Parse JSON response, handling markdown code block wrappers."""

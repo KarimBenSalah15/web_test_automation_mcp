@@ -1,7 +1,9 @@
 # Selector Validator implementation that performs post-LLM validation of the refined selector records,
-# ensuring that the output from the refiner step adheres to expected structure and that all selectors
+# ensuring that the output from the refiner step adheres to expected structure and that all selector_ids
 # are present in the originally extracted set. This is a crucial step to catch any issues with the LLM output.
 from __future__ import annotations
+
+import re
 
 from src.config.schemas import SelectorKind
 
@@ -9,7 +11,7 @@ from src.step1_extract.models import SelectorRecord
 
 
 class SelectorValidator:
-    """Post-LLM validator for structure and selector membership only."""
+    """Post-LLM validator for structure and selector_id membership."""
 
     def validate(
         self,
@@ -24,7 +26,7 @@ class SelectorValidator:
         if not isinstance(raw_records, list):
             return [], ["refiner payload missing 'records' list"]
 
-        source_by_selector = {record.selector: record for record in extracted_records}
+        source_by_id = {record.selector_id: record for record in extracted_records}
 
         valid: list[SelectorRecord] = []
         rejected: list[str] = []
@@ -46,11 +48,13 @@ class SelectorValidator:
             if not selector_id:
                 rejected.append(f"records[{idx}] missing selector_id")
                 continue
-            if selector not in source_by_selector:
-                rejected.append(f"records[{idx}] selector not in extracted set: {selector}")
+            if selector_id not in source_by_id:
+                rejected.append(f"records[{idx}] selector_id not in extracted set: {selector_id}")
                 continue
 
-            source = source_by_selector[selector]
+            source = source_by_id[selector_id]
+            suggested_selector = str(raw_item.get("suggested_selector", "")).strip() or None
+            final_selector = selector
 
             try:
                 kind = SelectorKind(kind_raw) if kind_raw else source.kind
@@ -58,20 +62,27 @@ class SelectorValidator:
                 rejected.append(f"records[{idx}] invalid kind: {kind_raw}")
                 continue
 
+            is_fragile = bool(raw_item.get("is_fragile", False))
+            if is_fragile and self._should_promote_suggested_selector(
+                selector=selector,
+                suggested_selector=suggested_selector,
+            ):
+                final_selector = suggested_selector or selector
+
             if selector_id in seen_ids:
                 rejected.append(f"duplicate selector_id: {selector_id}")
                 continue
-            if selector in seen_selectors:
-                rejected.append(f"duplicate selector: {selector}")
+            if final_selector in seen_selectors:
+                rejected.append(f"duplicate selector: {final_selector}")
                 continue
 
             seen_ids.add(selector_id)
-            seen_selectors.add(selector)
+            seen_selectors.add(final_selector)
 
             valid.append(
                 SelectorRecord(
                     selector_id=selector_id,
-                    selector=selector,
+                    selector=final_selector,
                     kind=kind,
                     llm_role=str(raw_item.get("llm_role") or selector_id),
                     label=str(raw_item.get("label") or source.label or "") or None,
@@ -80,12 +91,39 @@ class SelectorValidator:
                     name_attr=str(raw_item.get("name_attr") or source.name_attr or "") or None,
                     is_visible=source.is_visible,
                     is_enabled=source.is_enabled,
-                    is_fragile=bool(raw_item.get("is_fragile", False)),
+                    is_fragile=is_fragile,
                     suggested_selector=(
-                        str(raw_item.get("suggested_selector", "")).strip() or None
+                        suggested_selector
                     ),
                     source_xpath=source.source_xpath,
                 )
             )
 
         return valid, rejected
+
+    @staticmethod
+    def _should_promote_suggested_selector(*, selector: str, suggested_selector: str | None) -> bool:
+        if not suggested_selector:
+            return False
+
+        suggested = suggested_selector.strip()
+        if not suggested:
+            return False
+
+        # Ignore explicit null-ish strings occasionally returned by LLMs.
+        if suggested.lower() in {"none", "null", "n/a"}:
+            return False
+
+        # Promote only when the original selector looks like a brittle structural path.
+        is_structural_path = ":nth-of-type(" in selector or selector.strip().startswith("html")
+        if not is_structural_path:
+            return False
+
+        # Basic CSS sanity check for suggested selector.
+        if " " in suggested and ">" not in suggested and "[" not in suggested and "." not in suggested and "#" not in suggested:
+            return False
+
+        if re.search(r"[\n\r\t]", suggested):
+            return False
+
+        return True

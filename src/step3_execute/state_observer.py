@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import re
 from pathlib import Path
@@ -42,9 +43,9 @@ class StateObserver:
 
     async def _get_current_url(self) -> str:
         """Get the current page URL from MCP."""
-        # Try multiple candidate tool names that different MCP servers might use
         result = await self._mcp_client.call(
             tool_candidates=[
+                "list_pages",
                 "browser_get_url",
                 "get_current_url",
                 "get_url",
@@ -53,37 +54,40 @@ class StateObserver:
             ],
             arguments={},
         )
-        if result.ok and result.raw:
-            # Extract URL from response (handle both string and dict formats)
-            content = result.raw.get("content", [])
-            if isinstance(content, list) and content:
-                text = content[0].get("text") if isinstance(content[0], dict) else str(content[0])
-                if text and text.strip():
-                    return text.strip()
+        text = self._extract_text_content(result.raw if result.ok else None)
+        if text:
+            url_match = re.search(r"https?://[^\s\"'<>]+", text)
+            if url_match:
+                return url_match.group(0).rstrip(".,)")
         return "about:blank"
 
     async def _get_page_title(self) -> str | None:
         """Get the page title from MCP."""
         result = await self._mcp_client.call(
             tool_candidates=[
+                "list_pages",
                 "browser_get_page_title",
                 "get_page_title",
                 "page_title",
             ],
             arguments={},
         )
-        if result.ok and result.raw:
-            content = result.raw.get("content", [])
-            if isinstance(content, list) and content:
-                text = content[0].get("text") if isinstance(content[0], dict) else str(content[0])
-                if text and text.strip():
-                    return text.strip()
+        text = self._extract_text_content(result.raw if result.ok else None)
+        if text:
+            # Some MCP servers return JSON-like page lists with title fields.
+            title_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
+            if title_match:
+                return title_match.group(1)
+            line = text.splitlines()[0].strip()
+            if line and "http" not in line.lower():
+                return line
         return None
 
     async def _get_dom_snapshot(self) -> str | None:
         """Get and clean the DOM snapshot from MCP."""
         result = await self._mcp_client.call(
             tool_candidates=[
+                "take_snapshot",
                 "browser_get_dom",
                 "get_dom",
                 "dom_snapshot",
@@ -92,16 +96,10 @@ class StateObserver:
             ],
             arguments={},
         )
-        if not result.ok or not result.raw:
+        if not result.ok:
             return None
 
-        # Extract DOM content from response
-        content = result.raw.get("content", [])
-        dom_html = ""
-        if isinstance(content, list) and content:
-            text = content[0].get("text") if isinstance(content[0], dict) else str(content[0])
-            if text and text.strip():
-                dom_html = text.strip()
+        dom_html = self._extract_text_content(result.raw)
 
         if not dom_html:
             return None
@@ -117,6 +115,8 @@ class StateObserver:
         """Get console logs (errors/warnings) from MCP."""
         result = await self._mcp_client.call(
             tool_candidates=[
+                "list_console_messages",
+                "get_console_message",
                 "browser_get_console_logs",
                 "get_console_logs",
                 "console_logs",
@@ -127,21 +127,17 @@ class StateObserver:
         if not result.ok or not result.raw:
             return None
 
-        content = result.raw.get("content", [])
         logs: list[str] = []
-        if isinstance(content, list) and content:
-            text = content[0].get("text") if isinstance(content[0], dict) else str(content[0])
-            if text and text.strip():
-                # Parse as JSON array or newline-separated logs
-                try:
-                    import json
-                    parsed = json.loads(text)
-                    if isinstance(parsed, list):
-                        logs = [str(entry) for entry in parsed if entry]
-                except Exception:
-                    # If not JSON, treat as plain text
-                    lines = text.strip().split("\n")
-                    logs = [line.strip() for line in lines if line.strip()]
+        text = self._extract_text_content(result.raw)
+        if text:
+            # Parse as JSON array or newline-separated logs
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    logs = [str(entry) for entry in parsed if entry]
+            except Exception:
+                lines = text.strip().split("\n")
+                logs = [line.strip() for line in lines if line.strip()]
 
         return logs if logs else None
 
@@ -149,6 +145,7 @@ class StateObserver:
         """Capture and save a screenshot from MCP."""
         result = await self._mcp_client.call(
             tool_candidates=[
+                "take_screenshot",
                 "browser_screenshot",
                 "screenshot",
                 "capture_screenshot",
@@ -160,13 +157,9 @@ class StateObserver:
             return None
 
         try:
-            content = result.raw.get("content", [])
-            screenshot_data = None
-            if isinstance(content, list) and content:
-                # Check for base64 encoded image
-                text = content[0].get("text") if isinstance(content[0], dict) else str(content[0])
-                if text and text.strip():
-                    screenshot_data = text.strip()
+            screenshot_data = self._extract_image_base64(result.raw)
+            if not screenshot_data:
+                screenshot_data = self._extract_text_content(result.raw)
 
             if screenshot_data:
                 # Save as PNG in artifacts folder
@@ -214,3 +207,36 @@ class StateObserver:
         html = re.sub(r">\s+<", "><", html)
 
         return html.strip()
+
+    @staticmethod
+    def _extract_text_content(raw: dict[str, Any] | None) -> str | None:
+        if not raw:
+            return None
+        content = raw.get("content") or []
+        parts: list[str] = []
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str) and text.strip():
+                        parts.append(text.strip())
+                elif isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+        return "\n".join(parts).strip() if parts else None
+
+    @staticmethod
+    def _extract_image_base64(raw: dict[str, Any] | None) -> str | None:
+        if not raw:
+            return None
+        content = raw.get("content") or []
+        if not isinstance(content, list):
+            return None
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "image":
+                data = item.get("data")
+                if isinstance(data, str) and data.strip():
+                    return data.strip()
+        return None

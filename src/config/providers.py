@@ -48,8 +48,8 @@ DEFAULT_PROVIDER_MATRIX = ProviderMatrix(
                 model="gemini-3.1-flash-lite",
             ),
             fallback=ModelAssignment(
-                provider=ProviderName.CEREBRAS,
-                model="zai-glm-4.7",
+                provider=ProviderName.MISTRAL,
+                model="mistral-large-latest",
             ),
         ),
         PipelineStep.GENERATE: StepProviderPolicy(
@@ -68,8 +68,8 @@ DEFAULT_PROVIDER_MATRIX = ProviderMatrix(
                 model="llama-3.3-70b-versatile",
             ),
             fallback=ModelAssignment(
-                provider=ProviderName.CEREBRAS,
-                model="zai-glm-4.7",
+                provider=ProviderName.MISTRAL,
+                model="mistral-large-latest",
             ),
         ),
         PipelineStep.LOG: StepProviderPolicy(
